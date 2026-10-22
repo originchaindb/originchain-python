@@ -30,6 +30,7 @@ from importlib.util import find_spec
 _HTTP2_AVAILABLE = find_spec("h2") is not None
 
 from . import _diagnostics as _diag
+from ._identity import identity_headers
 from .errors import (
     OCAuthError,
     OCError,
@@ -305,7 +306,10 @@ class OriginChain:
         user_agent: Optional[str] = None,
         keepalive_expiry: float = DEFAULT_KEEPALIVE_EXPIRY_S,
         diagnostics: bool = False,
+        db_user: Optional[str] = None,
+        db_key: Optional[str] = None,
     ) -> None:
+        identity = identity_headers(db_user, db_key)
         self.base_url = base_url.rstrip("/")
         self.bearer = bearer
         self.tenant = tenant
@@ -321,6 +325,7 @@ class OriginChain:
             http2=_HTTP2_AVAILABLE,
             limits=_pool_limits(keepalive_expiry),
             headers={
+                **identity,
                 "Authorization": f"Bearer {bearer}",
                 "User-Agent": user_agent or "originchain-python/0.8.0",
             },
