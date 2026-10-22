@@ -25,6 +25,7 @@ from typing import Any, List, Literal, Mapping, Optional
 import httpx
 
 from . import _diagnostics as _diag
+from ._identity import identity_headers
 from .client import (
     DEFAULT_KEEPALIVE_EXPIRY_S,
     DEFAULT_MAX_RETRIES,
@@ -210,7 +211,10 @@ class AsyncOriginChain:
         user_agent: Optional[str] = None,
         keepalive_expiry: float = DEFAULT_KEEPALIVE_EXPIRY_S,
         diagnostics: bool = False,
+        db_user: Optional[str] = None,
+        db_key: Optional[str] = None,
     ) -> None:
+        identity = identity_headers(db_user, db_key)
         self.base_url = base_url.rstrip("/")
         self.bearer = bearer
         self.tenant = tenant
@@ -226,8 +230,9 @@ class AsyncOriginChain:
             http2=_HTTP2_AVAILABLE,
             limits=_pool_limits(keepalive_expiry),
             headers={
+                **identity,
                 "Authorization": f"Bearer {bearer}",
-                "User-Agent": user_agent or "originchain-python/0.8.0",
+                "User-Agent": user_agent or "originchain-python/0.9.0",
             },
         )
         self.schemas = _AsyncSchemas(self)

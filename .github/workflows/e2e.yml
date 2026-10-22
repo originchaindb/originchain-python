@@ -22,4 +22,6 @@ jobs:
           OC_BASE: ${{ secrets.OC_BASE }}
           OC_BEARER: ${{ secrets.OC_BEARER }}
           OC_TENANT: ${{ secrets.OC_TENANT }}
+          OC_DB_USER: ${{ secrets.OC_DB_USER }}
+          OC_DB_KEY: ${{ secrets.OC_DB_KEY }}
           OC_NS: py_ci_${{ github.run_id }}

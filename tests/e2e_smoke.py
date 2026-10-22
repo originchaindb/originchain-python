@@ -25,7 +25,7 @@ BASE = os.environ["OC_BASE"]
 TOK = os.environ["OC_BEARER"]
 T = os.environ["OC_TENANT"]
 NS = os.environ.get("OC_NS", "shopdemo")
-db = OriginChain(base_url=BASE, bearer=TOK, tenant=T)
+db = OriginChain(base_url=BASE, bearer=TOK, tenant=T, db_user=os.environ.get("OC_DB_USER") or None, db_key=os.environ.get("OC_DB_KEY") or None)
 
 results = []
 
@@ -104,9 +104,18 @@ step("vector.topk", lambda: db.vector.topk(P, VEC, k=5))
 step("fts.index", lambda: db.fts.index(P, "description", "p1", "a small blue widget for testing"))
 step("fts.search", lambda: db.fts.search(P, "description", "widget"))
 step("graph.neighbors ->[p2]", check_neighbors)
-step("ask", lambda: db.ask("how many products cost more than 5", schemas=[P]))
+def check_weighted_graph():
+    value = db.graph.dijkstra(P, rel="related", src="p1", dst="p2", weights={"p1|p2": 1.5})
+    assert value.cost == 1.5, "node-pair weighted cost"
+    missing = db.graph.dijkstra(P, rel="related", src="p1", dst="p2", weights={})
+    assert missing.cost is None, "missing weights skip edges"
+    return {"cost": value.cost, "missing": missing.cost}
+
+step("graph weighted and missing", check_weighted_graph)
+step("ask", lambda: db.ask("top 5 " + P + " by price desc", schemas=[P]))
 step("usage", lambda: db.usage())
-step("sql SELECT 1 (want-fail)", lambda: db.sql("SELECT 1"), expect_fail=True)
+step("sql SELECT 1", lambda: db.sql("SELECT 1"))
+step("invalid SQL (want-fail)", lambda: db.sql("SELECT FROM WHERE"), expect_fail=True)
 
 print("\n=== PYTHON SDK %s E2E (ns=%s) ===" % (getattr(__import__("originchain"), "__version__", "?"), NS))
 npass = 0

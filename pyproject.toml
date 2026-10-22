@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "originchain"
-version = "0.8.0"
+version = "0.9.0"
 description = "Official Python client for OriginChain - managed database for AI applications."
 readme = "README.md"
 authors = [{ name = "Silicoyn Technologies", email = "support@originchain.ai" }]
@@ -52,6 +52,11 @@ packages = ["originchain"]
 [tool.ruff]
 line-length = 100
 target-version = "py39"
+
+[tool.ruff.lint]
+# Keep the original SDK CI rule set explicit as Ruff's defaults evolve.
+# New formatting/type-modernization rules require their own reviewed migration.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.ruff.lint.per-file-ignores]
 # Deliberate mid-file imports: client.py imports _namespaces after the

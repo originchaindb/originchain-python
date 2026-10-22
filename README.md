@@ -344,3 +344,26 @@ table's analyzer config selects `lemmatizer="dictionary"`.
 
 This client follows semver. The `0.x` line is for design partners;
 the API surface may change before `1.0`.
+
+
+## Database identity (v0.9.0)
+
+Pass both database identity values alongside your instance bearer token. They
+become `X-OC-DB-User` and `X-OC-DB-Key` on engine requests, including diagnostics.
+They do not replace the instance bearer or grant permissions. Keep credentials
+in your application's secret store; never hard-code them in browser bundles.
+Omit both options for the existing bearer-only behavior. Partial/invalid pairs
+are rejected. Identity-bearing requests do not follow redirects.
+
+```
+OriginChain(base_url=endpoint, bearer=instance_token, tenant=tenant_id,
+            db_user=db_user, db_key=db_key)
+```
+
+## Weighted graph traversal
+
+Dijkstra `weights` maps directed node pairs to numeric weights, for example
+`{"u1|u2": 1.5, "u2|u3": 0.5}`, for an existing relation with those edges.
+The keys are not column names. Missing pairs skip edges; an empty map does not
+assign unit weights. An unreachable destination returns `{"cost": null}`.
+The result is a nullable cost, not an ordered path. The path endpoint reports unweighted reachability. See https://originchaindb.com/docs/graph.
