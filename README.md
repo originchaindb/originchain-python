@@ -346,7 +346,7 @@ This client follows semver. The `0.x` line is for design partners;
 the API surface may change before `1.0`.
 
 
-## Database identity (next SDK release)
+## Database identity (v0.9.0)
 
 Pass both database identity values alongside your instance bearer token. They
 become `X-OC-DB-User` and `X-OC-DB-Key` on engine requests, including diagnostics.
