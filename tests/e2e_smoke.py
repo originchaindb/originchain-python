@@ -17,6 +17,11 @@ import sys
 
 from originchain import OriginChain
 
+if os.environ.get("OC_REQUIRE_LIVE") == "1":
+    for name in ("OC_BASE", "OC_BEARER", "OC_TENANT"):
+        if not os.environ.get(name):
+            sys.exit("Required live-test setting missing: " + name)
+
 if not os.environ.get("OC_BASE"):
     print("OC_BASE unset — skipping live E2E (set OC_BASE/OC_BEARER/OC_TENANT to run).")
     sys.exit(0)
@@ -35,7 +40,7 @@ def step(name, fn, expect_fail=False):
         v = fn()
         results.append((name, not expect_fail, str(v).replace("\n", " ")[:100]))
     except Exception as ex:  # noqa: BLE001 - a smoke step records any failure
-        results.append((name, expect_fail, ("%s: %s" % (type(ex).__name__, ex))[:140]))
+        results.append((name, expect_fail and getattr(ex, "status", None) in (400, 422), ("%s: %s" % (type(ex).__name__, ex))[:140]))
 
 
 PRODUCTS_TOML = """version = 1

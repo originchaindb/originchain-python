@@ -156,13 +156,21 @@ class _SqlNamespace:
         self._p = parent
 
     # Callable form preserves the pre-namespace `client.sql("...")` API.
-    def __call__(self, query: str) -> Any:
-        return self._p._sql_callable_impl(query)
+    def __call__(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> Any:
+        return self._p._sql_callable_impl(
+            query, params, retry_safe=retry_safe, idempotency_key=idempotency_key
+        )
 
     def query(
         self,
         query: str,
         params: Optional[Sequence[Any]] = None,
+        *,
+        retry_safe: bool = False,
+        idempotency_key: Optional[str] = None,
     ) -> SqlResult:
         """Run a SELECT against the substrate.
 
@@ -192,6 +200,8 @@ class _SqlNamespace:
             "POST",
             f"/v1/tenants/{self._p.tenant}/sql",
             json=body,
+            retry_safe=retry_safe,
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key is not None else None,
         ).json()
         # The preview endpoint returns the kind-tagged union; query()
         # expects SELECT shape and surfaces a clear error otherwise so

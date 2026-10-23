@@ -367,3 +367,41 @@ Dijkstra `weights` maps directed node pairs to numeric weights, for example
 The keys are not column names. Missing pairs skip edges; an empty map does not
 assign unit weights. An unreachable destination returns `{"cost": null}`.
 The result is a nullable cost, not an ordered path. The path endpoint reports unweighted reachability. See https://originchaindb.com/docs/graph.
+
+## Retry policy and migration
+
+Sync and async clients default to at most three **additional** attempts on GET,
+HEAD and OPTIONS. `max_retries=0` disables retries; valid values are integers
+0..99. **Behavior change:** SQL and other mutation methods no longer retry
+automatically. Earlier versions could replay writes whose endpoints did not
+implement idempotency, even though a key was attached.
+
+SQL requires an explicit assertion that repeating the operation is safe:
+
+```python
+with OriginChain(base_url=base_url, bearer=bearer, tenant=tenant,
+                 max_retries=2, max_retry_time=30) as db:
+    row = db.sql_one("SELECT $1", [7], retry_safe=True)
+
+async with AsyncOriginChain(base_url=base_url, bearer=bearer, tenant=tenant,
+                            max_retries=2, max_retry_time=30) as db:
+    row = await db.sql_one("SELECT $1", [7], retry_safe=True)
+```
+
+The callable `sql`, `sql_one`, and sync `sql.query` accept positional parameters,
+`retry_safe`, and `idempotency_key`. A key alone is not permission to replay SQL.
+Do not set `retry_safe=True` for writes without verifying their replay semantics.
+The richer vector/FTS/admin namespaces still have differences between sync and async.
+
+Eligible calls retry transport errors and HTTP 429/500/502/503/504. Backoff uses
+full jitter with a 250 ms exponential cap growing to 4 seconds. `Retry-After`
+accepts integer seconds (including zero) or an HTTP date; invalid values fall
+back to jitter. A server delay that does not fit the retry window returns the
+last error instead of retrying early.
+
+`max_retry_time` defaults to 30 seconds and bounds **scheduling of retries and
+waits**, not an in-flight HTTP request. HTTPX's `timeout` still controls individual
+network phases; it is not a whole-call deadline. Async applications can use
+`asyncio.wait_for` for an overall deadline, and cancellation interrupts backoff.
+Logical request IDs and idempotency keys stay stable, with one diagnostic event
+per attempt. Avoid stacking another retry policy in a custom HTTP transport.

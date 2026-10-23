@@ -69,7 +69,7 @@ def client(engine: Handler, *, diagnostics: bool = False, retries: int = 0) -> O
 def test_every_call_sends_a_logical_request_id_kept_across_retries() -> None:
     engine = Engine((503, {"error": "busy"}), (200, {"kind": "select", "rows": []}))
     db = client(engine, retries=2)
-    db.sql("SELECT 1")
+    db.sql("SELECT 1", retry_safe=True)
     db.sql("SELECT 2")
     first, retry, second = engine.calls
     lrid = first.headers["X-OC-Logical-Request-Id"]
@@ -106,7 +106,7 @@ def test_diagnostics_are_off_by_default() -> None:
 def test_reports_carry_only_contract_fields_and_no_query_text() -> None:
     engine = Engine((503, {"error": "engine is busy"}), (200, {"kind": "select", "rows": []}))
     db = client(engine, diagnostics=True, retries=1)
-    db.sql("SELECT secret FROM private_table")
+    db.sql("SELECT secret FROM private_table", retry_safe=True)
     db._request("GET", f"/v1/tenants/{TENANT}/fts/articles/body?q=confidential+search")
     db.flush_diagnostics()
     events = engine.events
@@ -237,7 +237,7 @@ def test_async_client_correlates_and_reports() -> None:
             base_url="http://test.invalid", transport=httpx.MockTransport(engine)
         )
         db._backoff = lambda attempt: 0.0  # type: ignore[method-assign]
-        await db._request("POST", f"/v1/tenants/{TENANT}/sql", json={"sql": "SELECT 1"})
+        await db._request("POST", f"/v1/tenants/{TENANT}/sql", json={"sql": "SELECT 1"}, retry_safe=True)
         await db.flush_diagnostics()
         await db.aclose()
         return None

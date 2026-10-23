@@ -5,6 +5,14 @@ All notable changes to the OriginChain Python SDK. See the repo-root
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-23
+
+- Stop automatic retries of SQL and writes; safe reads retain retries. Add a finite retry scheduling window, full jitter, HTTP-date Retry-After, and explicit SQL retry safety.
+- Add positional parameters and stable idempotency keys to sync/async callable SQL and sql_one, and ship the PEP 561 typing marker.
+
+- Derive batch idempotency keys from the input chunk sequence, independently of the server's inserted-row count, so a final partial chunk cannot reuse an earlier key.
+- Reject invalid batch sizes before consuming input rows or sending requests.
+
 ## [0.8.0] — 2026-10-07
 
 ### Added

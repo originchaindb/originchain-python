@@ -1,9 +1,9 @@
-"""Async variant of :class:`OriginChain`. Mirrors the sync surface.
+"""Async client for the shared OriginChain operations.
 
 Both clients are kept side-by-side rather than sharing a common base
 because httpx's sync/async clients have subtly different timeout +
 context-manager semantics. Duplication is the lesser evil; pyright
-catches drift.
+catches type errors. The richer sync namespaces are not all available here yet.
 """
 
 # Same rationale as the sync client: httpx.Response.json() returns
@@ -20,11 +20,12 @@ import json as _json
 import os
 import time as _time
 import warnings
-from typing import Any, List, Literal, Mapping, Optional
+from typing import Any, List, Literal, Mapping, Optional, Sequence
 
 import httpx
 
 from . import _diagnostics as _diag
+from . import _retry
 from ._identity import identity_headers
 from .client import (
     DEFAULT_KEEPALIVE_EXPIRY_S,
@@ -207,6 +208,7 @@ class AsyncOriginChain:
         tenant: str,
         timeout: float = DEFAULT_TIMEOUT_S,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        max_retry_time: float = _retry.DEFAULT_MAX_RETRY_TIME,
         verify: bool | str = True,
         user_agent: Optional[str] = None,
         keepalive_expiry: float = DEFAULT_KEEPALIVE_EXPIRY_S,
@@ -214,11 +216,13 @@ class AsyncOriginChain:
         db_user: Optional[str] = None,
         db_key: Optional[str] = None,
     ) -> None:
+        _retry.validate_options(max_retries, max_retry_time)
         identity = identity_headers(db_user, db_key)
         self.base_url = base_url.rstrip("/")
         self.bearer = bearer
         self.tenant = tenant
         self.max_retries = max_retries
+        self.max_retry_time = max_retry_time
         # Opt-in client diagnostics (off by default); see `_diagnostics`.
         self._diagnostics: _diag.AsyncReporter | None = (
             _diag.AsyncReporter(self._send_diagnostics) if diagnostics else None
@@ -232,7 +236,7 @@ class AsyncOriginChain:
             headers={
                 **identity,
                 "Authorization": f"Bearer {bearer}",
-                "User-Agent": user_agent or "originchain-python/0.9.0",
+                "User-Agent": user_agent or "originchain-python/0.10.0",
             },
         )
         self.schemas = _AsyncSchemas(self)
@@ -281,17 +285,32 @@ class AsyncOriginChain:
 
     # ── SQL ───────────────────────────────────────────────────────────
 
-    async def sql(self, query: str) -> SqlResponse:
+    async def sql(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> SqlResponse:
         """See :meth:`OriginChain.sql` for the contract."""
+        from ._namespaces import _positional_params
+
+        payload: dict[str, Any] = {"sql": query}
+        if params is not None:
+            payload["params"] = _positional_params(params)
         r = await self._request(
             "POST",
             f"/v1/tenants/{self.tenant}/sql",
-            json={"sql": query},
+            json=payload,
+            retry_safe=retry_safe,
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key is not None else None,
         )
         return _decode_sql_response(r.json())
 
-    async def sql_one(self, query: str) -> Optional[dict[str, Any]]:
-        resp = await self.sql(query)
+    async def sql_one(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
+        resp = await self.sql(
+            query, params, retry_safe=retry_safe, idempotency_key=idempotency_key
+        )
         if not isinstance(resp, SqlSelect):
             raise OCValidationError(
                 f"sql_one expected SELECT, got {type(resp).__name__}"
@@ -429,11 +448,12 @@ class AsyncOriginChain:
         json: Any = None,
         content: Optional[bytes] = None,
         headers: Optional[dict[str, str]] = None,
+        retry_safe: bool | None = None,
     ) -> httpx.Response:
-        # Auto-Idempotency-Key on mutating calls. See the sync client's
-        # `_request` for the rationale; engine cache is LRU-bounded so
-        # fresh-per-call is safe, and callers retain override semantics
-        # by passing the header explicitly.
+        # A key only deduplicates endpoints that implement it; it does not
+        # authorize replay of arbitrary writes or SQL statements.
+        retries = self.max_retries if _retry.eligible(method, retry_safe) else 0
+        deadline = _time.perf_counter() + self.max_retry_time
         if method.upper() in _MUTATING_METHODS:
             if headers is None:
                 headers = {"Idempotency-Key": _new_idempotency_key()}
@@ -444,7 +464,7 @@ class AsyncOriginChain:
         logical_id, headers = _diag.correlate(headers)
         report = self._diagnostics
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retries + 1):
             started = _time.perf_counter()
             try:
                 resp = await self._client.request(
@@ -462,9 +482,11 @@ class AsyncOriginChain:
                         method=method, path=path, started=started,
                         logical_request_id=logical_id, attempt=attempt + 1, failure=e,
                     ))
-                if attempt < self.max_retries:
-                    await asyncio.sleep(self._backoff(attempt))
-                    continue
+                network_wait = self._backoff(attempt)
+                if attempt < retries and network_wait < deadline - _time.perf_counter():
+                    await asyncio.sleep(network_wait)
+                    if _time.perf_counter() < deadline:
+                        continue
                 err = OCError(f"transport error: {e}")
                 err.logical_request_id = logical_id
                 raise err from e
@@ -493,10 +515,15 @@ class AsyncOriginChain:
                     status=resp.status_code, request_id=request_id,
                     code=_diag.error_code(_json_or_none(resp)),
                 ))
-            if resp.status_code in RETRYABLE_STATUSES and attempt < self.max_retries:
-                wait = self._retry_after(resp) or self._backoff(attempt)
-                await asyncio.sleep(wait)
-                continue
+            if resp.status_code in RETRYABLE_STATUSES and attempt < retries:
+                wait = self._retry_after(resp)
+                if wait is None:
+                    wait = self._backoff(attempt)
+                if wait < deadline - _time.perf_counter():
+                    await resp.aclose()
+                    await asyncio.sleep(wait)
+                    if _time.perf_counter() < deadline:
+                        continue
 
             try:
                 self._raise_for(resp)
@@ -508,17 +535,11 @@ class AsyncOriginChain:
 
     @staticmethod
     def _backoff(attempt: int) -> float:
-        return min(4.0, 0.25 * (2 ** attempt))
+        return _retry.backoff(attempt)
 
     @staticmethod
     def _retry_after(resp: httpx.Response) -> Optional[float]:
-        ra = resp.headers.get("Retry-After")
-        if ra is None:
-            return None
-        try:
-            return float(ra)
-        except ValueError:
-            return None
+        return _retry.retry_after(resp.headers.get("Retry-After"))
 
     @staticmethod
     def _raise_for(resp: httpx.Response) -> None:
@@ -541,9 +562,10 @@ class AsyncOriginChain:
         if status == 400:
             raise OCValidationError(msg or "validation failed", status=status, body=body)
         if status == 429:
+            retry_after = AsyncOriginChain._retry_after(resp)
             raise OCRateLimitedError(
                 msg or "rate limited",
-                retry_after=AsyncOriginChain._retry_after(resp) or 1.0,
+                retry_after=1.0 if retry_after is None else retry_after,
                 status=status,
                 body=body,
             )
