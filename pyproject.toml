@@ -43,8 +43,8 @@ dev = [
 [project.urls]
 Homepage      = "https://originchain.ai"
 Documentation = "https://originchain.ai/docs"
-Source        = "https://github.com/originchain-ai/originchain-python"
-Issues        = "https://github.com/originchain-ai/originchain-python/issues"
+Source        = "https://github.com/originchaindb/originchain-python"
+Issues        = "https://github.com/originchaindb/originchain-python/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["originchain"]
