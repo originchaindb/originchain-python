@@ -1,4 +1,6 @@
-# OriginChain Python SDK 0.10.0
+# OriginChain Python SDK 0.10.0rc1
+
+GitHub prerelease for evaluation. This version is not published to npm or PyPI. Compatibility tests pass, but live database acceptance is blocked: the GitHub test endpoint fails to connect and the private test database rejects its stored token. The private Python runner also needs an ARM64 setup fix. Do not treat this preview as a production-verified stable release.
 
 This release adds conservative retries with bounded waits, HTTP-date Retry-After
 support, stable logical request IDs and idempotency keys, and per-attempt diagnostics.
