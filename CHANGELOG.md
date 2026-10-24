@@ -5,6 +5,16 @@ All notable changes to the OriginChain Python SDK. See the repo-root
 
 ## [Unreleased]
 
+## [0.10.0rc3] - 2026-10-24
+
+- Add `query_metrics(minutes=60, bucket_seconds=60)` to both clients with
+  public `QueryMetricsResponse` / `QueryMetricsBucket` typed dictionaries.
+- Preserve raw field names, wide integer timestamps and counters, and null
+  idle latency. Reuse existing transport, retry and error behavior.
+- Verify all three supported windows against a live database through both
+  clients, plus fresh-wheel and mock transport checks for wide values and
+  service authorization errors.
+
 ## [0.10.0rc2] - 2026-10-24
 
 - Add native async SQL, vector, FTS, admin and extended graph namespaces with

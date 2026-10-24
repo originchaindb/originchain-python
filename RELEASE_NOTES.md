@@ -1,39 +1,31 @@
-# OriginChainDB Python SDK 0.10.0rc2
+# OriginChainDB Python SDK 0.10.0rc3
 
-This GitHub preview adds native async SQL, vector, full-text, graph and admin
-namespaces, alongside streaming row batches. The existing callable SQL API and
-legacy async convenience methods retain their result shapes.
+This GitHub preview adds `query_metrics(minutes=60, bucket_seconds=60)` to the
+synchronous and native async clients. Its exported typed dictionaries retain
+server field names, Python integer precision for timestamps/counters, and
+`None` for idle latency. Existing timeout, authentication, retry and error
+handling apply to this safe read.
 
-Async batches accept ordinary and async iterables, send bounded chunks
-sequentially, and derive distinct idempotency keys from the input chunk index.
-Failure or cancellation stops later work. Earlier chunks may already be
-durable; writes are never automatically retried.
+Supported windows are 60 minutes / 60 seconds, 1440 / 600 and 10080 / 3600.
+Metrics describe the current process; restart clears history and results are
+not aggregated across replicas. Divide calls by `observed_seconds` for
+throughput over the actual coverage. Tenant service credentials or a query
+administrator are required; impersonated database-user headers are refused.
 
-SQL INSERT and DELETE results now preserve the server's execution counts.
-`sql.execute().rows_affected` is `None` when the server did not confirm a count,
-replacing an incorrect inferred value of one. Transaction-buffer counts are
-reported separately and do not imply a commit.
+The preview retains rc2's native async namespaces, bounded row batches and
+truthful SQL affected-row counts. Verification includes shared sync/async
+transport tests, fresh-wheel consumers, and read-only live checks of all three
+metrics windows. Final test counts, exact artifact hashes and compatibility
+CI results are recorded in the release verification receipt.
 
-Verification before this preview:
-
-- 441 offline tests passed; four optional legacy live pytest checks were skipped.
-- Ruff passed and type checking found no issues in the ten SDK modules.
-- The isolated live runner passed 19 checks, including native async batching,
-  positional SQL, confirmed deletion and subsequent absence, vector search,
-  full-text search, and graph traversal.
-- That live run used the explicit HTTP 402 `ask_unavailable` profile.
-  Successful Ask execution remains unverified; stable release promotion still
-  requires the full HTTP 200 Ask profile.
-- Compatibility CI covers Linux Python 3.9/3.12/3.14 and Windows/macOS Python
-  3.12, with wheel building and fresh-install checks in every job. The release
-  verification receipt records the results for the final commit.
-
-Install the preview from its GitHub release asset:
+Install after its GitHub preview release has been published:
 
 ```bash
-pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.2/originchain-0.10.0rc2-py3-none-any.whl"
+pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.3/originchain-0.10.0rc3-py3-none-any.whl"
 ```
 
-This preview is not a stable PyPI promotion. Advanced optional engine features
-and privileged admin mutations have transport-contract coverage; the live
-smoke does not exercise every such operation.
+This preview is not a stable PyPI promotion. Live acceptance uses the explicit
+HTTP 402 `ask_unavailable` profile; successful Ask execution remains unverified.
+Stable promotion still requires the full HTTP 200 Ask profile. Advanced
+optional features and privileged admin mutations have transport coverage;
+the live smoke does not exercise every such operation.
