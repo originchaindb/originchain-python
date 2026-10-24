@@ -35,6 +35,7 @@ _HTTP2_AVAILABLE = find_spec("h2") is not None
 from . import _diagnostics as _diag
 from . import _retry
 from ._identity import identity_headers
+from ._query_metrics import QueryMetricsResponse, _query_metrics_params
 from .errors import (
     OCAuthError,
     OCError,
@@ -338,7 +339,7 @@ class OriginChain:
             headers={
                 **identity,
                 "Authorization": f"Bearer {bearer}",
-                "User-Agent": user_agent or "originchain-python/0.10.0rc2",
+                "User-Agent": user_agent or "originchain-python/0.10.0rc3",
             },
         )
         self.schemas = _Schemas(self)
@@ -390,6 +391,27 @@ class OriginChain:
         return self._request(
             "POST", f"/v1/tenants/{self.tenant}/query", json=plan
         ).json()
+
+    def query_metrics(
+        self, minutes: int = 60, bucket_seconds: int = 60,
+    ) -> QueryMetricsResponse:
+        """Read query completion counts and mean latency for this process.
+
+        Supported minute/bucket-second pairs are 60/60, 1440/600 and
+        10080/3600. Results retain the JSON field names; timestamps are Unix
+        milliseconds and idle buckets have ``mean_latency_ms=None``. Use
+        ``observed_seconds`` for throughput, as coverage may be partial.
+        Restart clears history; this is not an aggregate across replicas.
+
+        Requires a tenant service credential or query administrator.
+        Impersonated database-user headers are refused by the server (403).
+        Uses this client's timeout, retries, identity and error handling.
+        """
+        response = self._request(
+            "GET", f"/v1/tenants/{self.tenant}/query-metrics",
+            params=_query_metrics_params(minutes, bucket_seconds),
+        )
+        return response.json()
 
     def usage(self) -> TenantUsage:
         """Live usage counters + the tenant's compute configuration.

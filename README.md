@@ -6,15 +6,15 @@ Official Python client for [OriginChain](https://originchain.ai).
 
 ## Install
 
-This branch prepares the `0.10.0rc2` GitHub preview with native async namespace
-parity. Install its release wheel after the preview is published:
+This branch prepares the `0.10.0rc3` GitHub preview with sync/async query
+metrics and native async namespace parity. Install its release wheel after the preview is published:
 
 ```bash
-pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.2/originchain-0.10.0rc2-py3-none-any.whl"
+pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.3/originchain-0.10.0rc3-py3-none-any.whl"
 ```
 
 The registry command below installs the latest stable PyPI version, which may
-not include this preview's async namespaces:
+not include this preview's query metrics or async namespaces:
 
 ```bash
 pip install originchain
@@ -45,6 +45,45 @@ result = db.ask("orders for AAPL above 50 shares last week")
 for row in result["rows"]:
     print(row)
 ```
+
+## Query metrics
+
+Both clients provide `query_metrics(minutes=60, bucket_seconds=60)` using the
+same authentication, timeout and safe-read retry settings as other requests.
+The response is a typed dictionary (`QueryMetricsResponse` with
+`QueryMetricsBucket` entries) retaining the server's field names:
+
+```python
+with OriginChain.from_env() as db:
+    metrics = db.query_metrics()  # 60 minutes, 60-second buckets
+    print(metrics["from"], metrics["to"])  # Unix milliseconds, Python integers
+    for bucket in metrics["buckets"]:
+        rate = bucket["calls"] / bucket["observed_seconds"]
+        print(rate, bucket["mean_latency_ms"])  # None when calls == 0
+
+```
+
+For async applications:
+
+```python
+from originchain import AsyncOriginChain
+
+async def read_daily_metrics():
+    async with AsyncOriginChain.from_env() as db:
+        return await db.query_metrics(minutes=1440, bucket_seconds=600)
+```
+
+Supported minute/bucket-second pairs are `60/60`,
+`1440/600` and `10080/3600`; the server rejects unsupported pairs. Coverage is
+clipped to collection start and retention, so use `observed_seconds` for
+throughput. Counts and millisecond timestamps preserve Python integer
+precision; idle mean latency stays `None`, not a fabricated zero.
+
+This is a `local-process` view of completed execution requests, not an
+aggregate across replicas or a count of individual SQL statements. Restart
+clears history. A tenant service credential or query administrator is required;
+impersonated database-user headers are refused with HTTP 403. The client
+preserves authorization errors and HTTP 503 incomplete-coverage failures.
 
 ## Async
 

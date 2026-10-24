@@ -15,16 +15,32 @@ import venv
 def verify_installed() -> None:
     import httpx
     import originchain
-    from originchain import AsyncOriginChain
+    from originchain import AsyncOriginChain, OriginChain
 
     package = Path(originchain.__file__).resolve().parent
     assert package.is_relative_to(Path(sys.prefix).resolve()), "imported source checkout"
     assert (package / "py.typed").is_file(), "missing PEP 561 marker"
     assert (package / "_async_namespaces.py").is_file(), "missing async namespaces"
+    from originchain import QueryMetricsBucket, QueryMetricsResponse
+    assert QueryMetricsBucket.__required_keys__ and QueryMetricsResponse.__required_keys__
     requests = []
+    metrics = {
+        "schema_version": 1, "tenant_id": "test", "from": 1790000000000,
+        "to": 1790000060000, "collection_started_at": 1790000000000,
+        "scope": "local-process", "bucket_seconds": 60, "retention_seconds": 604800,
+        "dropped_events": 4294967300, "buckets": [
+            {"at": 1790000000000, "calls": 0, "failed": 0,
+             "mean_latency_ms": None, "observed_seconds": 60.0},
+            {"at": 1790000060000, "calls": 4294967300, "failed": 4294967299,
+             "mean_latency_ms": 12.5, "observed_seconds": 60.0},
+        ],
+    }
 
     def handler(request):
         requests.append(request)
+        if request.url.path.endswith("/query-metrics"):
+            assert dict(request.url.params) == {"minutes": "60", "bucket_seconds": "60"}
+            return httpx.Response(200, json=metrics)
         if request.url.path.endswith("/_batch"):
             return httpx.Response(200, json={"inserted": len(json.loads(request.content))})
         if request.url.path.endswith("/sql"):
@@ -41,6 +57,13 @@ def verify_installed() -> None:
             return httpx.Response(200, json=[{"doc_id": "one", "score": 1}])
         return httpx.Response(200, json={"replication_mode": "active_passive"})
 
+    real_sync = httpx.Client
+    httpx.Client = lambda **kwargs: real_sync(**kwargs, transport=httpx.MockTransport(handler))
+    try:
+        with OriginChain(base_url="https://engine.invalid", bearer="test", tenant="test", verify=False) as client:
+            assert client.query_metrics() == metrics
+    finally:
+        httpx.Client = real_sync
     real = httpx.AsyncClient
     httpx.AsyncClient = lambda **kwargs: real(**kwargs, transport=httpx.MockTransport(handler))
 
@@ -48,6 +71,7 @@ def verify_installed() -> None:
         async with AsyncOriginChain(
             base_url="https://engine.invalid", bearer="test", tenant="test", verify=False,
         ) as db:
+            assert await db.query_metrics() == metrics
             assert (await db.sql("SELECT * FROM demo.rows")).rows == ({"id": "one"},)
             assert (await db.sql.query("SELECT * FROM demo.rows")).rows == [{"id": "one"}]
             assert (await db.sql.execute("DELETE FROM demo.rows WHERE id='one'")).rows_affected == 1
@@ -62,8 +86,8 @@ def verify_installed() -> None:
         asyncio.run(smoke())
     finally:
         httpx.AsyncClient = real
-    assert len(requests) == 8
-    print("Fresh wheel install: typing marker and 8 public async operations passed")
+    assert len(requests) == 10
+    print("Fresh wheel install: typing marker and 8 public async operations and sync/async query metrics passed")
 
 
 def main() -> None:

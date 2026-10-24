@@ -25,6 +25,7 @@ are also typed first-class. See :class:`OriginChain.sql`,
 namespace.
 """
 
+from ._query_metrics import QueryMetricsBucket, QueryMetricsResponse
 from .client import OriginChain
 from .async_client import AsyncOriginChain
 from .errors import (
@@ -88,6 +89,8 @@ __all__ = [
     "OriginChainBadRequest",
     "OriginChainServerError",
     # Models
+    "QueryMetricsBucket",
+    "QueryMetricsResponse",
     "SqlSelect",
     "SqlInsert",
     "SqlDelete",
@@ -123,4 +126,4 @@ __all__ = [
     "TenantUsage",
 ]
 
-__version__ = "0.10.0rc2"
+__version__ = "0.10.0rc3"
