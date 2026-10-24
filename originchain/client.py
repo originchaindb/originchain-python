@@ -1,6 +1,6 @@
 """Synchronous client. Shared operations also have async counterparts.
 
-The richer typed namespaces are currently synchronous; keep transport behavior
+The typed namespaces also have async counterparts; keep transport behavior
 consistent with :mod:`async_client` when adding methods.
 """
 
@@ -421,10 +421,11 @@ class OriginChain:
         Returns a tagged-union dataclass discriminated on ``kind``:
 
         - ``SqlSelect``: server ran the SELECT and returned rows.
-        - ``SqlInsert``: server translated the INSERT into the typed
-          ``/rows/:schema`` payload - caller re-issues with idempotency.
-        - ``SqlDelete``: server translated the DELETE into a typed PK
-          for ``/rows/:schema/:pk``.
+        - ``SqlInsert``: preserves the server's ``inserted`` count when present.
+        - ``SqlDelete``: preserves ``rows_affected`` and ``rows_buffered``.
+
+        Older engines may only translate writes. An absent count does not
+        confirm execution, and the SDK never replays a write automatically.
 
         See ``backend/crates/oc-http/src/preview_endpoints.rs::sql_exec``
         for the full contract."""

@@ -41,6 +41,10 @@ jobs:
   live:
     needs: gate
     uses: ./.github/workflows/e2e.yml
+    with:
+      # Stable releases require successful Ask execution regardless of the
+      # repository's free-tier profile used for branch validation.
+      expected_ask_status: "200"
     secrets: inherit
 
   package:

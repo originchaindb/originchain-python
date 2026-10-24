@@ -250,7 +250,7 @@ def test_sql_execute_insert(mock_client) -> None:
     assert isinstance(out, SqlExecResult)
     assert out.kind == "insert"
     assert out.schema == "t"
-    assert out.rows_affected == 1
+    assert out.rows_affected is None
 
 
 def test_sql_execute_delete(mock_client) -> None:
@@ -263,13 +263,51 @@ def test_sql_execute_delete(mock_client) -> None:
     out = client.sql.execute("DELETE FROM t WHERE id='row-1'")
     assert out.kind == "delete"
     assert out.schema == "t"
-    assert out.rows_affected == 1
+    assert out.rows_affected is None
 
 
 def test_sql_execute_error_400(mock_client) -> None:
     client = mock_client(lambda req: httpx.Response(400, json={"error": "bad sql"}))
     with pytest.raises(OriginChainBadRequest):
         client.sql.execute("nonsense")
+
+
+@pytest.mark.parametrize("count", [0, 1, 5])
+def test_sql_delete_preserves_confirmed_row_count(mock_client, count):
+    client = mock_client(lambda _: httpx.Response(200, json={
+        "kind": "delete", "schema": "t", "pk": "row-1", "rows_affected": count,
+    }))
+    assert client.sql("DELETE FROM t WHERE id='row-1'").rows_affected == count
+    assert client.sql.execute("DELETE FROM t WHERE id='row-1'").rows_affected == count
+
+
+def test_sql_buffered_delete_does_not_claim_commit(mock_client):
+    client = mock_client(lambda _: httpx.Response(200, json={
+        "kind": "delete", "schema": "t", "pk": "row-1", "rows_buffered": 1,
+    }))
+    for result in [client.sql("DELETE FROM t WHERE id='row-1'"),
+                   client.sql.execute("DELETE FROM t WHERE id='row-1'")]:
+        assert result.rows_affected is None
+        assert result.rows_buffered == 1
+
+
+@pytest.mark.parametrize("count", [0, 3])
+def test_sql_insert_preserves_server_count(mock_client, count):
+    client = mock_client(lambda _: httpx.Response(200, json={
+        "kind": "insert", "schema": "t", "inserted": count,
+    }))
+    assert client.sql("INSERT INTO t (id) VALUES ('one')").inserted == count
+    assert client.sql.execute("INSERT INTO t (id) VALUES ('one')").rows_affected == count
+
+
+@pytest.mark.parametrize("field", ["rows_affected", "rows_buffered"])
+@pytest.mark.parametrize("value", [-1, True, 1.5, "1"])
+def test_sql_delete_rejects_invalid_execution_count(mock_client, field, value):
+    client = mock_client(lambda _: httpx.Response(200, json={
+        "kind": "delete", "schema": "t", "pk": "row-1", field: value,
+    }))
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        client.sql.execute("DELETE FROM t WHERE id='row-1'")
 
 
 # ─────────────────────── 0.5 additions (2026-06-08) ───────────────────────

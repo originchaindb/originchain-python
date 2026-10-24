@@ -1,9 +1,9 @@
-"""Async client for the shared OriginChain operations.
+"""Async client for OriginChain operations and typed namespaces.
 
 Both clients are kept side-by-side rather than sharing a common base
 because httpx's sync/async clients have subtly different timeout +
 context-manager semantics. Duplication is the lesser evil; pyright
-catches type errors. The richer sync namespaces are not all available here yet.
+catches type errors. Both clients expose the same operation namespaces.
 """
 
 # Same rationale as the sync client: httpx.Response.json() returns
@@ -20,13 +20,20 @@ import json as _json
 import os
 import time as _time
 import warnings
-from typing import Any, List, Literal, Mapping, Optional, Sequence
+from typing import Any, AsyncIterable, AsyncIterator, Iterable, List, Literal, Mapping, Optional, Sequence
 
 import httpx
 
 from . import _diagnostics as _diag
 from . import _retry
 from ._identity import identity_headers
+from ._async_namespaces import (
+    _AsyncAdminNamespace,
+    _AsyncFtsNamespace,
+    _AsyncGraphNamespaceExtended,
+    _AsyncSqlNamespace,
+    _AsyncVectorNamespace,
+)
 from .client import (
     DEFAULT_KEEPALIVE_EXPIRY_S,
     DEFAULT_MAX_RETRIES,
@@ -112,7 +119,74 @@ class _AsyncRows:
         return r.json()
 
 
-class _AsyncGraph:
+    async def put_batch(
+        self,
+        schema: str,
+        rows: Iterable[Mapping[str, Any]] | AsyncIterable[Mapping[str, Any]],
+        *,
+        expect_insert: bool = False,
+        idempotency_key: Optional[str] = None,
+        chunk: int = 1000,
+    ) -> int:
+        """Upload rows sequentially in bounded chunks; return accepted rows.
+
+        Accepts ordinary or asynchronous iterables. Each submitted chunk has a
+        stable ``<idempotency_key>-c<index>`` key, independent of its accepted
+        row count. Writes are not automatically retried. On failure or task
+        cancellation, earlier chunks may already be durable; subsequent chunks
+        are not consumed or sent. To replay after checking the server outcome,
+        reuse the same base key, row ordering and chunk size.
+        """
+        if isinstance(chunk, bool) or not isinstance(chunk, int) or chunk <= 0:
+            raise ValueError("chunk must be a positive integer")
+        params = {"expect": "insert"} if expect_insert else None
+        base_idem = idempotency_key or _new_idempotency_key()
+        total = 0
+        chunk_no = 0
+        chunk_buf: list[Mapping[str, Any]] = []
+        async for row in _iterate_rows(rows):
+            chunk_buf.append(row)
+            if len(chunk_buf) >= chunk:
+                total += await self._send_batch(schema, chunk_buf, params, base_idem, chunk_no)
+                chunk_no += 1
+                chunk_buf = []
+                # Some transports complete immediately. Still give cancellation
+                # and other tasks a chance before consuming the next chunk.
+                await asyncio.sleep(0)
+        if chunk_buf:
+            total += await self._send_batch(schema, chunk_buf, params, base_idem, chunk_no)
+        return total
+
+    async def _send_batch(
+        self,
+        schema: str,
+        rows: list[Mapping[str, Any]],
+        params: Optional[dict[str, Any]],
+        base_idem: str,
+        chunk_no: int,
+    ) -> int:
+        response = await self._p._request(
+            "POST",
+            f"/v1/tenants/{self._p.tenant}/rows/{schema}/_batch",
+            json=list(rows),
+            params=params,
+            headers={"Idempotency-Key": f"{base_idem}-c{chunk_no}"},
+        )
+        return response.json().get("inserted", 0)
+
+
+async def _iterate_rows(
+    rows: Iterable[Mapping[str, Any]] | AsyncIterable[Mapping[str, Any]],
+) -> AsyncIterator[Mapping[str, Any]]:
+    if isinstance(rows, AsyncIterable):
+        async for row in rows:
+            yield row
+    else:
+        for row in rows:
+            yield row
+
+
+class _AsyncGraph(_AsyncGraphNamespaceExtended):
     """Async ``db.graph.*`` namespace. Mirrors the sync ``_Graph``."""
 
     def __init__(self, parent: "AsyncOriginChain") -> None:
@@ -242,6 +316,10 @@ class AsyncOriginChain:
         self.schemas = _AsyncSchemas(self)
         self.rows = _AsyncRows(self)
         self.graph = _AsyncGraph(self)
+        self.sql = _AsyncSqlNamespace(self)
+        self.vector = _AsyncVectorNamespace(self)
+        self.fts = _AsyncFtsNamespace(self)
+        self.admin = _AsyncAdminNamespace(self)
 
     @classmethod
     def from_env(cls, **kwargs: Any) -> "AsyncOriginChain":
@@ -285,11 +363,11 @@ class AsyncOriginChain:
 
     # ── SQL ───────────────────────────────────────────────────────────
 
-    async def sql(
+    async def _sql_callable_impl(
         self, query: str, params: Optional[Sequence[Any]] = None, *,
         retry_safe: bool = False, idempotency_key: Optional[str] = None,
     ) -> SqlResponse:
-        """See :meth:`OriginChain.sql` for the contract."""
+        """Implementation backing the legacy ``await client.sql(...)`` call."""
         from ._namespaces import _positional_params
 
         payload: dict[str, Any] = {"sql": query}
@@ -308,7 +386,7 @@ class AsyncOriginChain:
         self, query: str, params: Optional[Sequence[Any]] = None, *,
         retry_safe: bool = False, idempotency_key: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
-        resp = await self.sql(
+        resp = await self._sql_callable_impl(
             query, params, retry_safe=retry_safe, idempotency_key=idempotency_key
         )
         if not isinstance(resp, SqlSelect):

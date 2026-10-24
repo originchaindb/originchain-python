@@ -12,10 +12,14 @@ Guarded: exits 0 without running when OC_BASE is unset (e.g. a fork PR without
 secrets). Graph uses a self-relation FK (the real engine model): the edge runs
 from a row's PK to the value in from_col.
 """
+import asyncio
 import os
 import sys
 
-from originchain import OriginChain
+from originchain import AsyncOriginChain, OriginChain
+from e2e_contract import check_ask, expected_ask_status
+
+ASK_STATUS = expected_ask_status(os.environ.get("OC_E2E_ASK_STATUS", "200"))
 
 if os.environ.get("OC_REQUIRE_LIVE") == "1":
     for name in ("OC_BASE", "OC_BEARER", "OC_TENANT"):
@@ -117,10 +121,41 @@ def check_weighted_graph():
     return {"cost": value.cost, "missing": missing.cost}
 
 step("graph weighted and missing", check_weighted_graph)
-step("ask", lambda: db.ask("top 5 " + P + " by price desc", schemas=[P]))
+step("ask success" if ASK_STATUS == 200 else "ask unavailable contract", lambda: check_ask(
+    lambda: db.ask("top 5 " + P + " by price desc", schemas=[P]), ASK_STATUS,
+))
 step("usage", lambda: db.usage())
 step("sql SELECT 1", lambda: db.sql("SELECT 1"))
 step("invalid SQL (want-fail)", lambda: db.sql("SELECT FROM WHERE"), expect_fail=True)
+
+
+async def check_async_surface():
+    async with AsyncOriginChain(
+        base_url=BASE, bearer=TOK, tenant=T,
+        db_user=os.environ.get("OC_DB_USER") or None,
+        db_key=os.environ.get("OC_DB_KEY") or None,
+    ) as client:
+        async def rows():
+            for row_id in ("async-one", "async-two"):
+                yield {"id": row_id, "name": "Async", "price": 1.0}
+
+        assert await client.rows.put_batch(P, rows(), chunk=1) == 2
+        result = await client.sql.query("SELECT * FROM %s WHERE id=$1" % P, ["async-one"])
+        assert [row["id"] for row in result.rows] == ["async-one"]
+        assert (await client.sql("SELECT * FROM %s WHERE id=$1" % P, ["async-two"])).rows
+        assert "p2" in await client.graph.neighbors_of(P, "p1", "related")
+        assert (await client.vector.topk(P, VEC, k=5))[0].vec_id == "p1"
+        assert any(hit.doc_id == "p1" for hit in (await client.fts.search(P, "description", "widget")).hits)
+        for row_id in ("async-one", "async-two"):
+            deleted = await client.sql.execute("DELETE FROM %s WHERE id='%s'" % (P, row_id))
+            assert deleted.rows_affected == 1, "server did not confirm row deletion"
+            remaining = await client.sql.query("SELECT * FROM %s WHERE id=$1" % P, [row_id])
+            assert remaining.rows == [], "deleted row is still present"
+    return "async batch, SQL params/delete counts, vector, FTS and graph passed"
+
+
+step("async namespace acceptance", lambda: asyncio.run(check_async_surface()))
+db.close()
 
 print("\n=== PYTHON SDK %s E2E (ns=%s) ===" % (getattr(__import__("originchain"), "__version__", "?"), NS))
 npass = 0
@@ -128,4 +163,6 @@ for name, ok, detail in results:
     print("%-4s %-28s %s" % ("PASS" if ok else "FAIL", name, detail))
     npass += ok
 print("=== %d/%d passed ===" % (npass, len(results)))
+if ASK_STATUS == 402:
+    print("PROFILE: Ask unavailable (HTTP 402 ask_unavailable). Successful Ask execution remains unverified.")
 sys.exit(0 if npass == len(results) else 1)

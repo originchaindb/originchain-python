@@ -37,27 +37,45 @@ class SqlSelect:
 
 @dataclass(frozen=True)
 class SqlInsert:
-    """``{"kind": "insert", "schema": "...", "rows": [...]}``. Translated
-    INSERT payload - the caller is expected to re-issue against
-    ``/v1/tenants/:t/rows/:schema`` with idempotency. We don't auto-
-    execute writes from ``/sql`` in v0; see preview_endpoints.rs."""
+    """INSERT result. ``inserted`` confirms the count when the server emits it.
+
+    Older engines returned translated ``rows`` without executing them. An
+    absent count is unknown, not proof that those rows were written. The SDK
+    never automatically replays a translated write.
+    """
 
     schema: str
     rows: Tuple[Any, ...]
     kind: str = "insert"
+    inserted: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class SqlDelete:
-    """``{"kind": "delete", "schema": "...", "pk": "..."}``. Translated
-    DELETE - caller re-issues against ``/v1/tenants/:t/rows/:schema/:pk``."""
+    """DELETE result with server-reported affected and transaction-buffer counts.
+
+    ``rows_affected=None`` means the response did not confirm execution. Older
+    engines may only translate the statement. ``rows_buffered`` describes an
+    open transaction and must not be treated as a committed deletion.
+    """
 
     schema: str
     pk: str
     kind: str = "delete"
+    rows_affected: Optional[int] = None
+    rows_buffered: Optional[int] = None
 
 
 SqlResponse = Union[SqlSelect, SqlInsert, SqlDelete]
+
+
+def _optional_row_count(payload: Mapping[str, Any], field: str) -> Optional[int]:
+    value = payload.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"invalid SQL response {field}: expected a nonnegative integer")
+    return value
 
 
 def _decode_sql_response(payload: Mapping[str, Any]) -> SqlResponse:
@@ -70,11 +88,14 @@ def _decode_sql_response(payload: Mapping[str, Any]) -> SqlResponse:
         return SqlInsert(
             schema=str(payload["schema"]),
             rows=tuple(payload.get("rows", [])),
+            inserted=_optional_row_count(payload, "inserted"),
         )
     if kind == "delete":
         return SqlDelete(
             schema=str(payload["schema"]),
             pk=str(payload["pk"]),
+            rows_affected=_optional_row_count(payload, "rows_affected"),
+            rows_buffered=_optional_row_count(payload, "rows_buffered"),
         )
     raise ValueError(f"unknown SQL response kind: {kind!r}")
 
@@ -190,15 +211,29 @@ class SqlResult:
 
 @dataclass(frozen=True)
 class SqlExecResult:
-    """Non-SELECT-shape response. ``rows_affected`` is best-effort — the
-    preview ``/sql`` endpoint translates writes into typed row payloads
-    rather than executing them inline, so for INSERT/DELETE the SDK
-    re-issues against the typed row routes and surfaces the count the
-    substrate confirms. ``kind`` echoes the wire discriminator."""
+    """SQL result counts reported by the server, never inferred from statement type.
+
+    ``None`` means no execution count was returned. In particular, a legacy
+    translation or an open transaction's buffered rows do not prove a write
+    was committed. The SDK does not issue a follow-up write automatically.
+    """
 
     kind: str
-    rows_affected: int = 0
+    rows_affected: Optional[int] = None
     schema: Optional[str] = None
+    rows_buffered: Optional[int] = None
+
+
+def _decode_sql_exec_response(payload: Mapping[str, Any]) -> SqlExecResult:
+    decoded = _decode_sql_response(payload)
+    if isinstance(decoded, SqlInsert):
+        return SqlExecResult(kind=decoded.kind, schema=decoded.schema,
+                             rows_affected=decoded.inserted)
+    if isinstance(decoded, SqlDelete):
+        return SqlExecResult(kind=decoded.kind, schema=decoded.schema,
+                             rows_affected=decoded.rows_affected,
+                             rows_buffered=decoded.rows_buffered)
+    return SqlExecResult(kind=decoded.kind, rows_affected=0)
 
 
 @dataclass(frozen=True)

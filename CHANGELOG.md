@@ -5,6 +5,21 @@ All notable changes to the OriginChain Python SDK. See the repo-root
 
 ## [Unreleased]
 
+- Add native async SQL, vector, FTS, admin and extended graph namespaces with
+  the same wire contracts and response models as the synchronous client.
+  Preserve the callable SQL API and legacy async convenience methods.
+- Add async row batching for ordinary and async iterables. Upload sequential
+  bounded chunks, keep distinct stable per-chunk keys, reject invalid sizes
+  before consuming input, and stop on failure or cancellation. Completed
+  chunks remain subject to the server's durability and idempotency contract.
+- Preserve SQL INSERT/DELETE execution counts and transaction-buffer counts.
+  `sql.execute().rows_affected` is now `None` when the server did not confirm a
+  count, replacing the incorrect inferred value of one for translated writes.
+- Run shared transport contracts for both clients, expand CI to Windows and
+  macOS, and verify fresh wheel installations and the PEP 561 marker.
+- Add native async live acceptance checks and an explicit Ask-unavailable
+  profile that only accepts HTTP 402 with the exact `ask_unavailable` code.
+
 ## [0.10.0] - 2026-10-23
 
 - Stop automatic retries of SQL and writes; safe reads retain retries. Add a finite retry scheduling window, full jitter, HTTP-date Retry-After, and explicit SQL retry safety.
