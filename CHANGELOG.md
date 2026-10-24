@@ -5,6 +5,8 @@ All notable changes to the OriginChain Python SDK. See the repo-root
 
 ## [Unreleased]
 
+## [0.10.0rc2] - 2026-10-24
+
 - Add native async SQL, vector, FTS, admin and extended graph namespaces with
   the same wire contracts and response models as the synchronous client.
   Preserve the callable SQL API and legacy async convenience methods.

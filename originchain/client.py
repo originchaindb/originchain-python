@@ -338,7 +338,7 @@ class OriginChain:
             headers={
                 **identity,
                 "Authorization": f"Bearer {bearer}",
-                "User-Agent": user_agent or "originchain-python/0.10.0rc1",
+                "User-Agent": user_agent or "originchain-python/0.10.0rc2",
             },
         )
         self.schemas = _Schemas(self)

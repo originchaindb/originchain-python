@@ -6,6 +6,16 @@ Official Python client for [OriginChain](https://originchain.ai).
 
 ## Install
 
+This branch prepares the `0.10.0rc2` GitHub preview with native async namespace
+parity. Install its release wheel after the preview is published:
+
+```bash
+pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.2/originchain-0.10.0rc2-py3-none-any.whl"
+```
+
+The registry command below installs the latest stable PyPI version, which may
+not include this preview's async namespaces:
+
 ```bash
 pip install originchain
 ```
@@ -459,3 +469,8 @@ selected profile. GitHub E2E reads this setting from the repository variable of
 the same name; leave it unset for the default full profile.
 The stable release workflow always requests the full `200` profile, overriding
 the repository variable, and cannot promote an Ask-unavailable run.
+
+The 24 October 2026 candidate passed 441 offline tests and 19 live acceptance
+checks on the explicit Ask-unavailable profile. Successful Ask execution is
+still unverified. Four older optional live pytest checks were skipped during
+the offline suite; they are separate from the 19-check live runner.
