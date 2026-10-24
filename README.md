@@ -91,6 +91,8 @@ Parameters are positional: lists bind `$1`, `$2` and so on. Dictionaries are rej
 
 Use `db.sql.execute(...)` for execution results and `db.sql_one(...)` for one row or `None`. The older callable `db.sql(...)` remains available and returns a tagged result. Server-reported write counts can be zero or `None`; an absent count is unknown. `rows_buffered` is separate from committed execution.
 
+Known issue in `0.10.0rc3`: a bulk DELETE can succeed and then raise `KeyError('pk')` while decoding the response. Check the database outcome before retrying the write.
+
 For row APIs and batches:
 
 ```python
@@ -179,7 +181,7 @@ except OCError as error:
     raise
 ```
 
-HTTP failures use `OCError` subclasses; transport failures can be HTTPX exceptions. `OCReplicationDegraded` is a warning about replication acknowledgement, not an `OCError`. Include the request ID in support reports and keep credentials and query data out of logs.
+HTTP failures use `OCError` subclasses. Transport failures are wrapped in `OCError`, with the underlying HTTPX exception available as `error.__cause__`. `OCReplicationDegraded` is a warning about replication acknowledgement, not an `OCError`. Include the request ID in support reports and keep credentials and query data out of logs.
 
 Diagnostics are opt-in and report request metadata to your own engine, excluding SQL text, parameters and row contents. Closing the client flushes pending reports.
 
