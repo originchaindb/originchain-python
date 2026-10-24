@@ -33,7 +33,7 @@ from typing import Any, Callable
 import httpx
 
 #: The SDK version reported with diagnostics; kept equal to pyproject.toml by a test.
-SDK_VERSION = "0.10.0rc3"
+SDK_VERSION = "0.10.0rc4"
 
 LOGICAL_REQUEST_ID_HEADER = "X-OC-Logical-Request-Id"
 ATTEMPT_HEADER = "X-OC-Attempt"

@@ -45,3 +45,10 @@ jobs:
           OC_BASE: ${{ secrets.OC_BASE }}
           OC_BEARER: ${{ secrets.OC_BEARER }}
           OC_TENANT: ${{ secrets.OC_TENANT }}
+
+      - name: Bulk DELETE results (sync and async, isolated fixtures)
+        run: python scripts/verify_sql_delete_live.py
+        env:
+          OC_BASE: ${{ secrets.OC_BASE }}
+          OC_BEARER: ${{ secrets.OC_BEARER }}
+          OC_TENANT: ${{ secrets.OC_TENANT }}

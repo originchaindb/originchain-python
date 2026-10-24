@@ -44,6 +44,10 @@ def verify_installed() -> None:
         if request.url.path.endswith("/_batch"):
             return httpx.Response(200, json={"inserted": len(json.loads(request.content))})
         if request.url.path.endswith("/sql"):
+            if json.loads(request.content)["sql"] == "DELETE FROM demo.rows":
+                return httpx.Response(200, json={
+                    "kind": "delete", "schema": "demo.rows", "rows_affected": 2,
+                })
             if json.loads(request.content)["sql"].startswith("DELETE"):
                 return httpx.Response(200, json={
                     "kind": "delete", "schema": "demo.rows", "pk": "one", "rows_affected": 1,
@@ -62,6 +66,9 @@ def verify_installed() -> None:
     try:
         with OriginChain(base_url="https://engine.invalid", bearer="test", tenant="test", verify=False) as client:
             assert client.query_metrics() == metrics
+            deleted = client.sql("DELETE FROM demo.rows")
+            assert deleted.pk is None and deleted.rows_affected == 2
+            assert client.sql.execute("DELETE FROM demo.rows").rows_affected == 2
     finally:
         httpx.Client = real_sync
     real = httpx.AsyncClient
@@ -72,6 +79,9 @@ def verify_installed() -> None:
             base_url="https://engine.invalid", bearer="test", tenant="test", verify=False,
         ) as db:
             assert await db.query_metrics() == metrics
+            deleted = await db.sql("DELETE FROM demo.rows")
+            assert deleted.pk is None and deleted.rows_affected == 2
+            assert (await db.sql.execute("DELETE FROM demo.rows")).rows_affected == 2
             assert (await db.sql("SELECT * FROM demo.rows")).rows == ({"id": "one"},)
             assert (await db.sql.query("SELECT * FROM demo.rows")).rows == [{"id": "one"}]
             assert (await db.sql.execute("DELETE FROM demo.rows WHERE id='one'")).rows_affected == 1
@@ -86,8 +96,8 @@ def verify_installed() -> None:
         asyncio.run(smoke())
     finally:
         httpx.AsyncClient = real
-    assert len(requests) == 10
-    print("Fresh wheel install: typing marker and 8 public async operations and sync/async query metrics passed")
+    assert len(requests) == 14
+    print("Fresh wheel: typing marker, async namespaces, sync/async metrics and bulk DELETE passed")
 
 
 def main() -> None:
