@@ -44,7 +44,7 @@ from .models import (
     VectorDeleteBulkResult,
     VectorDeleteResult,
     VectorHitV2,
-    _decode_sql_response,
+    _decode_sql_exec_response,
 )
 
 if TYPE_CHECKING:
@@ -156,13 +156,21 @@ class _SqlNamespace:
         self._p = parent
 
     # Callable form preserves the pre-namespace `client.sql("...")` API.
-    def __call__(self, query: str) -> Any:
-        return self._p._sql_callable_impl(query)
+    def __call__(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> Any:
+        return self._p._sql_callable_impl(
+            query, params, retry_safe=retry_safe, idempotency_key=idempotency_key
+        )
 
     def query(
         self,
         query: str,
         params: Optional[Sequence[Any]] = None,
+        *,
+        retry_safe: bool = False,
+        idempotency_key: Optional[str] = None,
     ) -> SqlResult:
         """Run a SELECT against the substrate.
 
@@ -192,6 +200,8 @@ class _SqlNamespace:
             "POST",
             f"/v1/tenants/{self._p.tenant}/sql",
             json=body,
+            retry_safe=retry_safe,
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key is not None else None,
         ).json()
         # The preview endpoint returns the kind-tagged union; query()
         # expects SELECT shape and surfaces a clear error otherwise so
@@ -292,35 +302,18 @@ class _SqlNamespace:
         return MaterializedViewRows._from_payload(payload)
 
     def execute(self, stmt: str) -> SqlExecResult:
-        """Run a non-SELECT (INSERT / UPDATE / DELETE).
+        """Submit INSERT or DELETE and preserve server-reported execution counts.
 
-        The preview ``/sql`` endpoint translates writes into typed row
-        payloads rather than executing them inline (see
-        ``oc-http/src/preview_endpoints.rs::sql_exec``). This method
-        round-trips the translation as a :class:`SqlExecResult` with
-        the translated ``kind`` and (when known) the affected schema.
-        Customers who want auto-execution of the translation should
-        re-issue against ``client.rows.*`` with an idempotency key."""
+        A missing count is ``None``: older engines can return a translation
+        without executing it, and transaction buffering does not prove a
+        commit. No follow-up row write is issued automatically.
+        """
         payload = self._p._request(
             "POST",
             f"/v1/tenants/{self._p.tenant}/sql",
             json={"sql": stmt},
         ).json()
-        decoded = _decode_sql_response(payload)
-        # The tagged-union has `.kind` on every variant; `.schema` only
-        # on SqlInsert / SqlDelete (not SqlSelect). Read defensively
-        # via getattr so mypy doesn't trip on the union access.
-        kind_val = getattr(decoded, "kind", "unknown")
-        kind: str = str(kind_val) if kind_val is not None else "unknown"
-        schema_val = getattr(decoded, "schema", None)
-        schema: Optional[str] = str(schema_val) if schema_val is not None else None
-        # Translated INSERTs / DELETEs report 1 row each (preview
-        # endpoint doesn't execute multi-row writes inline). UPDATEs
-        # are not yet supported by the preview translator — they come
-        # back as 400, which is surfaced as OCValidationError before
-        # we get here.
-        rows_affected = 1 if kind in ("insert", "delete") else 0
-        return SqlExecResult(kind=kind, rows_affected=rows_affected, schema=schema)
+        return _decode_sql_exec_response(payload)
 
 
 # ─────────────────────────── Vector namespace ───────────────────────────

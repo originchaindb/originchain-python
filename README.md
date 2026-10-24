@@ -6,6 +6,16 @@ Official Python client for [OriginChain](https://originchain.ai).
 
 ## Install
 
+This branch prepares the `0.10.0rc2` GitHub preview with native async namespace
+parity. Install its release wheel after the preview is published:
+
+```bash
+pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.2/originchain-0.10.0rc2-py3-none-any.whl"
+```
+
+The registry command below installs the latest stable PyPI version, which may
+not include this preview's async namespaces:
+
 ```bash
 pip install originchain
 ```
@@ -50,15 +60,38 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-> **Note:** the typed namespaces shown below (`db.sql.query`, `db.vector.*`,
-> `db.fts.*`, the extended `db.graph.*` algorithms, `db.admin.*`) are
-> currently available on the **sync client only**; async parity is planned.
-> `AsyncOriginChain` today covers `schemas`, `rows`, `ask()`, `usage()`,
-> the callable `sql()` / `sql_one()`, `vector_put()` / `vector_topk()`,
-> `fts_index()` / `fts_search()`, and core graph traversals
-> (`neighbors` / `reverse_neighbors` / `bfs` / `path` / `dijkstra`).
+Both clients expose `schemas`, `rows`, `sql`, `vector`, `fts`, `graph`, and
+`admin` with the same operation names, arguments and result models. With
+`AsyncOriginChain`, await each network operation, including `db.sql.query`,
+`db.vector.topk`, and the extended graph algorithms. Legacy calls such as
+`await db.sql(...)`, `await db.sql_one(...)`, `await db.vector_topk(...)` and
+`await db.fts_search(...)` keep their existing response shapes. Availability of
+each operation still depends on engine support, feature flags and privileges.
 
-## SQL (sync client)
+```python
+async with AsyncOriginChain.from_env() as db:
+    result = await db.sql.query(
+        "SELECT * FROM trading.orders WHERE symbol = $1", ["MSFT"]
+    )
+    print(result.rows)
+    accepted = await db.rows.put_batch(
+        "trading.orders",
+        ({"order_id": f"import-{i}", "symbol": "MSFT", "qty": i} for i in range(500)),
+        chunk=100,
+        idempotency_key="orders-import-20261024",
+    )
+```
+
+Async `rows.put_batch` also accepts an async iterable. It consumes one chunk at
+a time and sends chunks sequentially, with distinct keys such as
+`orders-import-20261024-c0` and `orders-import-20261024-c1`. The returned count is
+the total accepted by the server. Failures and cancellation propagate; earlier
+chunks may already be durable, and later chunks are not consumed or sent.
+Writes are not automatically retried. After checking the server outcome, a
+caller replaying a batch must keep the same base key, row ordering and chunk
+size; server idempotency retention still applies.
+
+## SQL
 
 ```python
 # Typed surface (recommended). Bind parameters are POSITIONAL: pass a
@@ -71,7 +104,7 @@ for row in result.rows:
     print(row["order_id"], row["qty"])
 print(result.columns)  # ["order_id", "qty"]
 
-# Non-SELECT statements come back as a translation envelope:
+# Execution counts are reported by the server; None means unknown:
 exec_result = db.sql.execute("INSERT INTO trading.orders ...")
 print(exec_result.kind, exec_result.rows_affected)
 ```
@@ -80,12 +113,19 @@ The legacy callable `db.sql("SELECT ...")` still works and returns the
 tagged-union dataclass. `db.sql_one("SELECT ... LIMIT 1")` returns the
 first row dict (or `None`).
 
+`SqlInsert.inserted`, `SqlDelete.rows_affected`, and
+`SqlExecResult.rows_affected` preserve server-reported counts, including zero.
+Earlier engines may return a translation without a count; the SDK reports
+`None` in that case and never replays the write automatically. A separate
+`rows_buffered` count means an open transaction still requires a commit.
+Check these fields before claiming that a write or deletion succeeded.
+
 > **Parameters are positional, not named.** The engine binds `$1` / `$2`
 > by index; there is no named-parameter binder. Passing a `dict` raises
 > `OCValidationError` with the positional rewrite in the message rather
 > than guessing an order for you.
 
-## Vector (sync client)
+## Vector
 
 ```python
 # Typed surface (recommended): `dim` is derived from the vector length.
@@ -111,7 +151,7 @@ print(res.installed, res.partitions, res.dim)
 The legacy `db.vector_put(...)` / `db.vector_topk(...)` methods stay
 available for code written before the typed namespace landed.
 
-## Full-text (sync client)
+## Full-text
 
 ```python
 db.fts.index("articles", "body", "d1", "the quick brown fox")
@@ -137,7 +177,7 @@ db.fts.install_stopwords("articles", "body", ["the", "a", "an"])
 
 `db.fts_index(...)` / `db.fts_search(...)` remain for back-compat.
 
-## Graph (sync client)
+## Graph
 
 ```python
 # Single-hop neighbours + BFS:
@@ -253,7 +293,7 @@ dropped. `close()` / `aclose()` send what is still queued; call
 typed-namespace batch. All new methods are additive — no
 breaking changes — and require an engine deployed at commit
 `2c1fe55a` or later. The examples below use the typed namespaces and
-are **sync-client only** for now; async parity is planned.
+use the synchronous client; with `AsyncOriginChain`, await the same methods.
 
 ### Vector: bulk delete + IVF lifecycle
 
@@ -367,3 +407,70 @@ Dijkstra `weights` maps directed node pairs to numeric weights, for example
 The keys are not column names. Missing pairs skip edges; an empty map does not
 assign unit weights. An unreachable destination returns `{"cost": null}`.
 The result is a nullable cost, not an ordered path. The path endpoint reports unweighted reachability. See https://originchaindb.com/docs/graph.
+
+## Retry policy and migration
+
+Sync and async clients default to at most three **additional** attempts on GET,
+HEAD and OPTIONS. `max_retries=0` disables retries; valid values are integers
+0..99. **Behavior change:** SQL and other mutation methods no longer retry
+automatically. Earlier versions could replay writes whose endpoints did not
+implement idempotency, even though a key was attached.
+
+SQL requires an explicit assertion that repeating the operation is safe:
+
+```python
+with OriginChain(base_url=base_url, bearer=bearer, tenant=tenant,
+                 max_retries=2, max_retry_time=30) as db:
+    row = db.sql_one("SELECT $1", [7], retry_safe=True)
+
+async with AsyncOriginChain(base_url=base_url, bearer=bearer, tenant=tenant,
+                            max_retries=2, max_retry_time=30) as db:
+    row = await db.sql_one("SELECT $1", [7], retry_safe=True)
+```
+
+The callable `sql`, `sql_one`, and `sql.query` accept positional parameters,
+`retry_safe`, and `idempotency_key`. A key alone is not permission to replay SQL.
+Do not set `retry_safe=True` for writes without verifying their replay semantics.
+Both clients apply the same retry policy to their typed namespaces.
+
+Eligible calls retry transport errors and HTTP 429/500/502/503/504. Backoff uses
+full jitter with a 250 ms exponential cap growing to 4 seconds. `Retry-After`
+accepts integer seconds (including zero) or an HTTP date; invalid values fall
+back to jitter. A server delay that does not fit the retry window returns the
+last error instead of retrying early.
+
+`max_retry_time` defaults to 30 seconds and bounds **scheduling of retries and
+waits**, not an in-flight HTTP request. HTTPX's `timeout` still controls individual
+network phases; it is not a whole-call deadline. Async applications can use
+`asyncio.wait_for` for an overall deadline, and cancellation interrupts backoff.
+Logical request IDs and idempotency keys stay stable, with one diagnostic event
+per attempt. Avoid stacking another retry policy in a custom HTTP transport.
+
+## Compatibility and verification
+
+Python 3.9+ is supported. CI runs the shared sync/async contract suite on Linux
+with Python 3.9, 3.12 and 3.14, plus Windows and macOS with Python 3.12. Every
+job builds and installs the wheel into a fresh virtual environment and checks
+the typing marker and public async operations. Async cancellation stops local
+work and future retries; an in-flight write may already have reached the server.
+
+`tests/e2e_smoke.py` registers an isolated namespace using `OC_NS` and requires
+working credentials when `OC_REQUIRE_LIVE=1`. It checks sync operations and
+native async batching, positional SQL, confirmed deletion plus absence,
+vector search, full-text search and graph traversal. Administrative mutations
+and all optional advanced engine features are covered by transport contracts,
+not by this live smoke.
+
+The default `OC_E2E_ASK_STATUS=200` requires successful Ask execution. An
+explicit `OC_E2E_ASK_STATUS=402` validates only the exact `ask_unavailable`
+response on a tenant without Ask enabled; it does not validate successful Ask
+execution. Other statuses, other error codes and unexpected success fail the
+selected profile. GitHub E2E reads this setting from the repository variable of
+the same name; leave it unset for the default full profile.
+The stable release workflow always requests the full `200` profile, overriding
+the repository variable, and cannot promote an Ask-unavailable run.
+
+The 24 October 2026 candidate passed 441 offline tests and 19 live acceptance
+checks on the explicit Ask-unavailable profile. Successful Ask execution is
+still unverified. Four older optional live pytest checks were skipped during
+the offline suite; they are separate from the 19-check live runner.

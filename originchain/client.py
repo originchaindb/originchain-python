@@ -1,5 +1,8 @@
-"""Synchronous client. The async variant in :mod:`async_client` mirrors
-this surface exactly - keep both in sync when adding methods."""
+"""Synchronous client. Shared operations also have async counterparts.
+
+The typed namespaces also have async counterparts; keep transport behavior
+consistent with :mod:`async_client` when adding methods.
+"""
 
 # httpx.Response.json() returns `Any`, which `mypy --strict` flags at
 # every `return resp.json()` even when the method's declared return
@@ -16,7 +19,7 @@ import os
 import time
 import uuid
 import warnings
-from typing import Any, Iterable, List, Literal, Mapping, Optional
+from typing import Any, Iterable, List, Literal, Mapping, Optional, Sequence
 
 import httpx
 from importlib.util import find_spec
@@ -30,6 +33,7 @@ from importlib.util import find_spec
 _HTTP2_AVAILABLE = find_spec("h2") is not None
 
 from . import _diagnostics as _diag
+from . import _retry
 from ._identity import identity_headers
 from .errors import (
     OCAuthError,
@@ -83,10 +87,10 @@ _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 def _new_idempotency_key() -> str:
-    """Generate a fresh Idempotency-Key. The engine's server-side cache is
-    bounded (LRU 10k entries + 24h TTL), so fresh-per-call is safe and
-    makes retries on the same request object idempotent without the caller
-    having to think about it."""
+    """Generate a key for endpoints that implement deduplication.
+
+    A key alone does not make arbitrary SQL or writes safe to replay.
+    """
     return uuid.uuid4().hex
 
 
@@ -157,18 +161,22 @@ class _Rows:
         the same cache slots and the engine dedupes correctly. The caller
         can pass a stable `idempotency_key` to extend dedup across process
         restarts; otherwise we mint a fresh base for this single call."""
+        if isinstance(chunk, bool) or not isinstance(chunk, int) or chunk <= 0:
+            raise ValueError("chunk must be a positive integer")
         params = {"expect": "insert"} if expect_insert else None
         base_idem = idempotency_key or _new_idempotency_key()
         total = 0
+        chunk_no = 0
         chunk_buf: list[Mapping[str, Any]] = []
-        for i, r in enumerate(rows):
+        for r in rows:
             chunk_buf.append(r)
             if len(chunk_buf) >= chunk:
-                total += self._send_batch(schema, chunk_buf, params, base_idem, i // chunk)
+                total += self._send_batch(schema, chunk_buf, params, base_idem, chunk_no)
+                chunk_no += 1
                 chunk_buf = []
         if chunk_buf:
             total += self._send_batch(
-                schema, chunk_buf, params, base_idem, total // chunk
+                schema, chunk_buf, params, base_idem, chunk_no
             )
         return total
 
@@ -302,6 +310,7 @@ class OriginChain:
         tenant: str,
         timeout: float = DEFAULT_TIMEOUT_S,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        max_retry_time: float = _retry.DEFAULT_MAX_RETRY_TIME,
         verify: bool | str = True,
         user_agent: Optional[str] = None,
         keepalive_expiry: float = DEFAULT_KEEPALIVE_EXPIRY_S,
@@ -309,11 +318,13 @@ class OriginChain:
         db_user: Optional[str] = None,
         db_key: Optional[str] = None,
     ) -> None:
+        _retry.validate_options(max_retries, max_retry_time)
         identity = identity_headers(db_user, db_key)
         self.base_url = base_url.rstrip("/")
         self.bearer = bearer
         self.tenant = tenant
         self.max_retries = max_retries
+        self.max_retry_time = max_retry_time
         # Opt-in client diagnostics (off by default); see `_diagnostics`.
         self._diagnostics: _diag.SyncReporter | None = (
             _diag.SyncReporter(self._send_diagnostics) if diagnostics else None
@@ -327,7 +338,7 @@ class OriginChain:
             headers={
                 **identity,
                 "Authorization": f"Bearer {bearer}",
-                "User-Agent": user_agent or "originchain-python/0.9.0",
+                "User-Agent": user_agent or "originchain-python/0.10.0rc2",
             },
         )
         self.schemas = _Schemas(self)
@@ -395,7 +406,10 @@ class OriginChain:
 
     # ── SQL ───────────────────────────────────────────────────────────
 
-    def _sql_callable_impl(self, query: str) -> SqlResponse:
+    def _sql_callable_impl(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> SqlResponse:
         """Implementation backing the legacy ``client.sql("...")`` callable.
 
         Lives on the client (not on the namespace) because the typed
@@ -407,26 +421,39 @@ class OriginChain:
         Returns a tagged-union dataclass discriminated on ``kind``:
 
         - ``SqlSelect``: server ran the SELECT and returned rows.
-        - ``SqlInsert``: server translated the INSERT into the typed
-          ``/rows/:schema`` payload - caller re-issues with idempotency.
-        - ``SqlDelete``: server translated the DELETE into a typed PK
-          for ``/rows/:schema/:pk``.
+        - ``SqlInsert``: preserves the server's ``inserted`` count when present.
+        - ``SqlDelete``: preserves ``rows_affected`` and ``rows_buffered``.
+
+        Older engines may only translate writes. An absent count does not
+        confirm execution, and the SDK never replays a write automatically.
 
         See ``backend/crates/oc-http/src/preview_endpoints.rs::sql_exec``
         for the full contract."""
+        from ._namespaces import _positional_params
+
+        payload: dict[str, Any] = {"sql": query}
+        if params is not None:
+            payload["params"] = _positional_params(params)
         body = self._request(
             "POST",
             f"/v1/tenants/{self.tenant}/sql",
-            json={"sql": query},
+            json=payload,
+            retry_safe=retry_safe,
+            headers={"Idempotency-Key": idempotency_key} if idempotency_key is not None else None,
         ).json()
         return _decode_sql_response(body)
 
-    def sql_one(self, query: str) -> Optional[dict[str, Any]]:
+    def sql_one(
+        self, query: str, params: Optional[Sequence[Any]] = None, *,
+        retry_safe: bool = False, idempotency_key: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         """Convenience: run a SELECT and return the first row (or
         ``None`` if no rows). Raises :class:`OCValidationError` if the
         statement isn't a SELECT - there's no "first" of an INSERT or
         DELETE translation."""
-        resp = self._sql_callable_impl(query)
+        resp = self._sql_callable_impl(
+            query, params, retry_safe=retry_safe, idempotency_key=idempotency_key
+        )
         if not isinstance(resp, SqlSelect):
             raise OCValidationError(
                 f"sql_one expected SELECT, got {type(resp).__name__}"
@@ -593,12 +620,12 @@ class OriginChain:
         json: Any = None,
         content: Optional[bytes] = None,
         headers: Optional[dict[str, str]] = None,
+        retry_safe: bool | None = None,
     ) -> httpx.Response:
-        # Auto-add Idempotency-Key on every mutating call so a network
-        # blip / 502 retry deduplicates. The engine's idempotency cache
-        # is LRU-bounded (10k entries) so a fresh UUID per call is safe;
-        # callers who want cross-process retry semantics can still pass
-        # a stable key in `headers`.
+        # A key only deduplicates endpoints that implement it; it does not
+        # authorize replay of arbitrary writes or SQL statements.
+        retries = self.max_retries if _retry.eligible(method, retry_safe) else 0
+        deadline = time.perf_counter() + self.max_retry_time
         if method.upper() in _MUTATING_METHODS:
             if headers is None:
                 headers = {"Idempotency-Key": _new_idempotency_key()}
@@ -609,7 +636,7 @@ class OriginChain:
         logical_id, headers = _diag.correlate(headers)
         report = self._diagnostics
         last_exc: Optional[Exception] = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(retries + 1):
             started = time.perf_counter()
             try:
                 resp = self._client.request(
@@ -627,9 +654,11 @@ class OriginChain:
                         method=method, path=path, started=started,
                         logical_request_id=logical_id, attempt=attempt + 1, failure=e,
                     ))
-                if attempt < self.max_retries:
-                    time.sleep(self._backoff(attempt))
-                    continue
+                network_wait = self._backoff(attempt)
+                if attempt < retries and network_wait < deadline - time.perf_counter():
+                    time.sleep(network_wait)
+                    if time.perf_counter() < deadline:
+                        continue
                 err = OCError(f"transport error: {e}")
                 err.logical_request_id = logical_id
                 raise err from e
@@ -658,10 +687,15 @@ class OriginChain:
                     status=resp.status_code, request_id=request_id,
                     code=_diag.error_code(_json_or_none(resp)),
                 ))
-            if resp.status_code in RETRYABLE_STATUSES and attempt < self.max_retries:
-                wait = self._retry_after(resp) or self._backoff(attempt)
-                time.sleep(wait)
-                continue
+            if resp.status_code in RETRYABLE_STATUSES and attempt < retries:
+                wait = self._retry_after(resp)
+                if wait is None:
+                    wait = self._backoff(attempt)
+                if wait < deadline - time.perf_counter():
+                    resp.close()
+                    time.sleep(wait)
+                    if time.perf_counter() < deadline:
+                        continue
 
             try:
                 self._raise_for(resp)
@@ -674,18 +708,11 @@ class OriginChain:
 
     @staticmethod
     def _backoff(attempt: int) -> float:
-        # Exponential with jitter cap. 0.25, 0.5, 1.0, 2.0, capped at 4 s.
-        return min(4.0, 0.25 * (2 ** attempt))
+        return _retry.backoff(attempt)
 
     @staticmethod
     def _retry_after(resp: httpx.Response) -> Optional[float]:
-        ra = resp.headers.get("Retry-After")
-        if ra is None:
-            return None
-        try:
-            return float(ra)
-        except ValueError:
-            return None
+        return _retry.retry_after(resp.headers.get("Retry-After"))
 
     @staticmethod
     def _raise_for(resp: httpx.Response) -> None:
@@ -714,9 +741,10 @@ class OriginChain:
         if status == 400:
             raise OCValidationError(msg or "validation failed", status=status, body=body)
         if status == 429:
+            retry_after = OriginChain._retry_after(resp)
             raise OCRateLimitedError(
                 msg or "rate limited",
-                retry_after=OriginChain._retry_after(resp) or 1.0,
+                retry_after=1.0 if retry_after is None else retry_after,
                 status=status,
                 body=body,
             )

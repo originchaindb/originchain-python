@@ -1,13 +1,24 @@
 name: e2e
 
 on:
+  workflow_call:
+    inputs:
+      expected_ask_status:
+        description: "Expected Ask HTTP status: 200 for full acceptance, 402 for unavailable contract only"
+        type: string
+        default: "200"
   push:
-    branches: [main]
+    branches: [main, "sdk/**"]
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   e2e:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,13 +26,15 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -e .
-      # Live end-to-end smoke against the sdk-ci tenant. Self-skips (exits 0)
-      # when OC_BASE is unset, so forks without secrets stay green.
+      # Owned branches require actual live checks; fork PRs skip this job.
       - run: python tests/e2e_smoke.py
         env:
+          OC_REQUIRE_LIVE: "1"
           OC_BASE: ${{ secrets.OC_BASE }}
           OC_BEARER: ${{ secrets.OC_BEARER }}
           OC_TENANT: ${{ secrets.OC_TENANT }}
           OC_DB_USER: ${{ secrets.OC_DB_USER }}
           OC_DB_KEY: ${{ secrets.OC_DB_KEY }}
           OC_NS: py_ci_${{ github.run_id }}
+          # Explicit capability profile; unset means Ask must return success.
+          OC_E2E_ASK_STATUS: ${{ inputs.expected_ask_status || vars.OC_E2E_ASK_STATUS || '200' }}
