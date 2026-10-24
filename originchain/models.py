@@ -57,10 +57,11 @@ class SqlDelete:
     ``rows_affected=None`` means the response did not confirm execution. Older
     engines may only translate the statement. ``rows_buffered`` describes an
     open transaction and must not be treated as a committed deletion.
+    ``pk`` is absent for bulk deletions and is then ``None``.
     """
 
     schema: str
-    pk: str
+    pk: Optional[str] = None
     kind: str = "delete"
     rows_affected: Optional[int] = None
     rows_buffered: Optional[int] = None
@@ -93,7 +94,7 @@ def _decode_sql_response(payload: Mapping[str, Any]) -> SqlResponse:
     if kind == "delete":
         return SqlDelete(
             schema=str(payload["schema"]),
-            pk=str(payload["pk"]),
+            pk=str(payload["pk"]) if payload.get("pk") is not None else None,
             rows_affected=_optional_row_count(payload, "rows_affected"),
             rows_buffered=_optional_row_count(payload, "rows_buffered"),
         )

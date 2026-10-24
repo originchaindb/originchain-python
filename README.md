@@ -9,10 +9,10 @@ The `originchain` package provides synchronous and asynchronous clients for Orig
 Requires Python 3.9 or later. Install the current GitHub preview:
 
 ```sh
-python -m pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.3/originchain-0.10.0rc3-py3-none-any.whl"
+python -m pip install "https://github.com/originchaindb/originchain-python/releases/download/v0.10.0-rc.4/originchain-0.10.0rc4-py3-none-any.whl"
 ```
 
-Version `0.10.0rc3` is a prerelease. `pip install originchain` may select an older PyPI version with a smaller async API. Async support and HTTP/2 dependencies are included; no extra is required. Checksums are on the [release page](https://github.com/originchaindb/originchain-python/releases/tag/v0.10.0-rc.3).
+Version `0.10.0rc4` is a prerelease. `pip install originchain` may select an older PyPI version with a smaller async API. Async support and HTTP/2 dependencies are included; no extra is required. Checksums are on the [release page](https://github.com/originchaindb/originchain-python/releases/tag/v0.10.0-rc.4).
 
 ## Your first query
 
@@ -91,7 +91,7 @@ Parameters are positional: lists bind `$1`, `$2` and so on. Dictionaries are rej
 
 Use `db.sql.execute(...)` for execution results and `db.sql_one(...)` for one row or `None`. The older callable `db.sql(...)` remains available and returns a tagged result. Server-reported write counts can be zero or `None`; an absent count is unknown. `rows_buffered` is separate from committed execution.
 
-Known issue in `0.10.0rc3`: a bulk DELETE can succeed and then raise `KeyError('pk')` while decoding the response. Check the database outcome before retrying the write.
+`SqlDelete.pk` is `None` when the server does not return a single deleted primary key, including bulk DELETE results. Use the server-reported `rows_affected` count to inspect execution.
 
 For row APIs and batches:
 
@@ -200,7 +200,7 @@ Use service or query-administrator credentials without database-user impersonati
 
 ## Compatibility and development
 
-CI covers Python 3.9, 3.12 and 3.14 on Linux, plus Python 3.12 on Windows and macOS. The [release page](https://github.com/originchaindb/originchain-python/releases/tag/v0.10.0-rc.3) contains package checksums and the scope of live database verification. The `0.x` API can change before 1.0.
+CI covers Python 3.9, 3.12 and 3.14 on Linux, plus Python 3.12 on Windows and macOS. The [release page](https://github.com/originchaindb/originchain-python/releases/tag/v0.10.0-rc.4) contains package checksums and the scope of live database verification. The `0.x` API can change before 1.0.
 
 ```sh
 python -m venv .venv

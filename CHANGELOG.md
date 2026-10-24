@@ -5,6 +5,13 @@ All notable changes to the OriginChain Python SDK. See the repo-root
 
 ## [Unreleased]
 
+## [0.10.0rc4] - 2026-10-24
+
+- Decode successful bulk DELETE responses without a `pk` field in both clients.
+  `SqlDelete.pk` is now optional; omitted or null keys remain `None`.
+- Preserve single-key responses and server-reported counts, including zero,
+  large values and unknown counts. Buffered rows remain distinct from committed rows.
+
 ## [0.10.0rc3] - 2026-10-24
 
 - Add `query_metrics(minutes=60, bucket_seconds=60)` to both clients with
