@@ -2,7 +2,7 @@
 
 Official Python client for [OriginChain](https://originchain.ai).
 
-> Other languages: TypeScript / JavaScript → [`@originchain/sdk`](https://www.npmjs.com/package/@originchain/sdk) · Go → [`github.com/originchain-ai/originchain-go`](https://github.com/originchain-ai/originchain-go) · raw HTTP → [originchain.ai/docs](https://originchain.ai/docs).
+> Other languages: TypeScript / JavaScript → [`@originchain/sdk` preview](https://github.com/originchaindb/originchadb/releases/tag/v0.7.0-rc.3) · Go → [`github.com/originchaindb/originchaindb-go` preview](https://github.com/originchaindb/originchaindb-go/releases/tag/v0.2.0-rc.2) · raw HTTP → [HTTP API reference](https://originchaindb.com/docs/api).
 
 ## Install
 
